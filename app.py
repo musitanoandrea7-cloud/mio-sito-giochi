@@ -1,6 +1,7 @@
 import os
 import requests
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from supabase import create_client, Client
 from groq import Groq
 
@@ -50,10 +51,10 @@ def elabora_descrizione_ia(testo_originale):
     return chat_completion.choices[0].message.content
 
 # ---------------------------------------------------------
-# 5. RECUPERO GIOCHI DA IGDB ED ESECUZIONE
+# 5. RECUPERO GIOCHI DAL 01/01/2026 AD OGGI
 # ---------------------------------------------------------
 def recupera_e_salva_giochi():
-    print("🚀 Script avviato correttamente!")
+    print("🚀 Avvio recupero giochi dal 1° Gennaio 2026 ad Oggi!")
     
     print("Ottenimento token da Twitch...")
     access_token = get_twitch_token()
@@ -62,51 +63,67 @@ def recupera_e_salva_giochi():
         'Client-ID': TWITCH_CLIENT_ID,
         'Authorization': f'Bearer {access_token}',
     }
-    
-    # Data di oggi in timestamp UNIX (inizio e fine giornata)
-    oggi = datetime.now()
-    timestamp_inizio = int(datetime(oggi.year, oggi.month, oggi.day, 0, 0, 0).timestamp())
-    timestamp_fine = int(datetime(oggi.year, oggi.month, oggi.day, 23, 59, 59).timestamp())
 
-    # Query IGDB: Piattaforme (167=PS5, 169=Xbox Series X, 130=Switch, 6=PC)
-    query = f'''
-    fields name, summary, platforms.name, cover.url, first_release_date;
-    where release_dates.date >= {timestamp_inizio} & release_dates.date <= {timestamp_fine} & platforms = (167, 169, 130, 6);
-    limit 50;
-    '''
+    # Intervallo di date: dal 1 Gennaio 2026 a oggi
+    data_corrente = datetime(2026, 1, 1)
+    data_oggi = datetime.now()
 
-    print("Ricerca giochi in uscita oggi...")
-    response = requests.post('https://api.igdb.com/v4/games', headers=headers, data=query)
-    giochi = response.json()
+    while data_corrente <= data_oggi:
+        data_str = data_corrente.strftime('%Y-%m-%d')
+        print(f"\n📅 --- Elaborazione giochi per il giorno: {data_str} ---")
 
-    print(f"Trovati {len(giochi)} giochi in uscita oggi!")
+        timestamp_inizio = int(datetime(data_corrente.year, data_corrente.month, data_corrente.day, 0, 0, 0).timestamp())
+        timestamp_fine = int(datetime(data_corrente.year, data_corrente.month, data_corrente.day, 23, 59, 59).timestamp())
 
-    for gioco in giochi:
-        titolo = gioco.get('name')
-        summary = gioco.get('summary', '')
-        
-        # Estrai piattaforme
-        piattaforme = ", ".join([p['name'] for p in gioco.get('platforms', [])])
-        
-        # Estrai URL Immagine (convertito ad alta risoluzione)
-        immagine_url = ""
-        if 'cover' in gioco:
-            immagine_url = "https:" + gioco['cover']['url'].replace("t_thumb", "t_cover_big")
-            
-        print(f"Elaborazione IA per: {titolo}...")
-        descrizione_italiano = elabora_descrizione_ia(summary)
-        
-        # Salva su Supabase
-        dati_gioco = {
-            "titolo": titolo,
-            "piattaforme": piattaforme,
-            "data_uscita": oggi.strftime('%Y-%m-%d'),
-            "descrizione": descrizione_italiano,
-            "immagine_url": immagine_url
-        }
-        
-        supabase.table("giochi").insert(dati_gioco).execute()
-        print(f"✅ Salvato con successo nel Database: {titolo}")
+        # Query IGDB: Piattaforme (167=PS5, 169=Xbox Series X, 130=Switch, 6=PC)
+        query = f'''
+        fields name, summary, platforms.name, cover.url, first_release_date;
+        where release_dates.date >= {timestamp_inizio} & release_dates.date <= {timestamp_fine} & platforms = (167, 169, 130, 6);
+        limit 50;
+        '''
 
-# Avvio diretto della funzione senza condizioni
+        try:
+            response = requests.post('https://api.igdb.com/v4/games', headers=headers, data=query)
+            giochi = response.json()
+
+            if isinstance(giochi, list):
+                print(f"Trovati {len(giochi)} giochi in uscita il {data_str}!")
+
+                for gioco in giochi:
+                    titolo = gioco.get('name')
+                    summary = gioco.get('summary', '')
+                    
+                    # Estrai piattaforme
+                    piattaforme = ", ".join([p['name'] for p in gioco.get('platforms', [])])
+                    
+                    # Estrai URL Immagine (convertito ad alta risoluzione)
+                    immagine_url = ""
+                    if 'cover' in gioco:
+                        immagine_url = "https:" + gioco['cover']['url'].replace("t_thumb", "t_cover_big")
+                        
+                    print(f"Elaborazione IA per: {titolo}...")
+                    descrizione_italiano = elabora_descrizione_ia(summary)
+                    
+                    # Salva su Supabase
+                    dati_gioco = {
+                        "titolo": titolo,
+                        "piattaforme": piattaforme,
+                        "data_uscita": data_str,
+                        "descrizione": descrizione_italiano,
+                        "immagine_url": immagine_url
+                    }
+                    
+                    supabase.table("giochi").insert(dati_gioco).execute()
+                    print(f"✅ Salvato con successo nel Database: {titolo}")
+            else:
+                print(f"Risposta non valida da IGDB per il {data_str}: {giochi}")
+
+        except Exception as e:
+            print(f"❌ Errore durante il recupero per il {data_str}: {e}")
+
+        # Passa al giorno successivo
+        data_corrente += timedelta(days=1)
+        time.sleep(0.5)  # Pausa di sicurezza tra una richiesta e l'altra
+
+# Avvio diretto della funzione
 recupera_e_salva_giochi()
